@@ -10,6 +10,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Giải nén nếu bạn upload dạng zip
         run: if [ -f ShellApp.zip ]; then unzip -oq ShellApp.zip; fi
+      - name: Chọn Xcode mới nhất
+        run: |
+          ls /Applications | grep -i xcode || true
+          NEW=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
+          sudo xcode-select -s "$NEW"
+          xcodebuild -version
+          swift --version
       - name: Cài XcodeGen
         run: brew install xcodegen
       - name: Tạo project Xcode
