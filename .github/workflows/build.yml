@@ -60,6 +60,12 @@ jobs:
           mkdir -p out
           cp target/wasm32-unknown-unknown/release/sample_wasm.wasm out/plugin.wasm
           cp manifest.json out/
+          python3 - <<'PYEOF'
+          import json, base64
+          m = json.load(open('manifest.json'))
+          w = base64.b64encode(open('out/plugin.wasm', 'rb').read()).decode()
+          json.dump({"manifest": m, "wasm": w}, open('out/sample-wasm.plugin.json', 'w'))
+          PYEOF
       - uses: actions/upload-artifact@v4
         with:
           name: sample-wasm
