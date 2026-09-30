@@ -1,1 +1,34 @@
-t
+name: Build IPA
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Giải nén nếu bạn upload dạng zip
+        run: if [ -f ShellApp.zip ]; then unzip -oq ShellApp.zip; fi
+      - name: Cài XcodeGen
+        run: brew install xcodegen
+      - name: Tạo project Xcode
+        working-directory: ShellApp
+        run: xcodegen generate
+      - name: Build (không ký)
+        working-directory: ShellApp
+        run: |
+          xcodebuild -project ShellApp.xcodeproj -scheme ShellApp \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Đóng gói IPA
+        working-directory: ShellApp
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/ShellApp.app Payload/
+          zip -qr ShellApp.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShellApp-ipa
+          path: ShellApp/ShellApp.ipa
