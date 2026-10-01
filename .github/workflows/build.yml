@@ -1,194 +1,72 @@
 name: Build
-
 on:
   workflow_dispatch: {}
   push:
     branches: [main]
-
 jobs:
   app:
     runs-on: macos-15
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Giải nén ShellApp.zip nếu có
-        shell: bash
-        run: |
-          set -e
-          if [ -f ShellApp.zip ]; then
-            unzip -oq ShellApp.zip
-          fi
-
-          # Bản ShellApp_fixed.zip hiện tại có dạng:
-          # shellapp/ShellApp/...
-          # Chuẩn hóa về ./ShellApp để các bước build dùng chung.
-          if [ -d "shellapp/ShellApp" ] && [ ! -d "ShellApp" ]; then
-            mv shellapp/ShellApp ShellApp
-          fi
-
-          if [ ! -f "ShellApp/project.yml" ]; then
-            echo "Không tìm thấy ShellApp/project.yml"
-            find . -maxdepth 4 -name project.yml -print
-            exit 1
-          fi
-
-          echo "ShellApp source:"
-          find ShellApp -maxdepth 2 -type f | sort | head -80
-
+      - name: Giải nén nếu bạn upload dạng zip
+        run: if [ -f ShellApp.zip ]; then unzip -oq ShellApp.zip; fi
       - name: Chọn Xcode mới nhất
-        shell: bash
         run: |
-          set -e
-          echo "Các Xcode có trên runner:"
-          ls -d /Applications/Xcode*.app 2>/dev/null || true
-
-          NEW="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' ! -iname '*beta*' | sort -V | tail -1)"
-          if [ -z "$NEW" ]; then
-            echo "Không tìm thấy Xcode ổn định."
-            exit 1
-          fi
-
-          echo "Dùng: $NEW"
+          ls /Applications | grep -i xcode || true
+          NEW=$(ls -d /Applications/Xcode_*.app | grep -vi beta | sort -V | tail -1)
           sudo xcode-select -s "$NEW"
           xcodebuild -version
           swift --version
-
       - name: Cài XcodeGen
         run: brew install xcodegen
-
       - name: Tạo project Xcode
         working-directory: ShellApp
-        run: |
-          set -e
-          xcodegen generate
-          test -f ShellApp.xcodeproj/project.pbxproj
-
-      - name: Kiểm tra source Swift
+        run: xcodegen generate
+      - name: Build (không ký)
         working-directory: ShellApp
-        shell: bash
-        run: |
-          set -e
-          echo "Swift files:"
-          find App Sources -type f -name '*.swift' | sort
-          echo "Plugin files:"
-          find plugins -type f 2>/dev/null | sort || true
-
-      - name: Build iOS (không ký)
-        working-directory: ShellApp
-        shell: bash
         run: |
           set -o pipefail
-
-          xcodebuild \
-            -project ShellApp.xcodeproj \
-            -scheme ShellApp \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
+          xcodebuild -project ShellApp.xcodeproj -scheme ShellApp \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log
-
-      - name: Hiển thị lỗi build nếu có
-        if: failure()
-        working-directory: ShellApp
-        shell: bash
-        run: |
-          echo "=================== CÁC DÒNG LỖI ==================="
-          if [ -f build.log ]; then
-            grep -E 'error:|fatal error:|BUILD FAILED' build.log | sort -u | head -100 || true
-          fi
-
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build \
+            2>&1 | tee build.log || {
+              echo "=================== CÁC DÒNG LỖI ==================="
+              grep -E "error:" build.log | sort -u | head -40
+              exit 1
+            }
       - name: Đóng gói IPA
         working-directory: ShellApp
-        shell: bash
         run: |
-          set -e
-          APP="build/Build/Products/Release-iphoneos/ShellApp.app"
-          test -d "$APP"
-
-          rm -rf Payload ShellApp.ipa
-          mkdir -p Payload
-          cp -R "$APP" Payload/
-          /usr/bin/zip -qr ShellApp.ipa Payload
-
-          ls -lh ShellApp.ipa
-
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/ShellApp.app Payload/
+          zip -qr ShellApp.ipa Payload
       - uses: actions/upload-artifact@v4
         with:
           name: ShellApp-ipa
           path: ShellApp/ShellApp.ipa
-          if-no-files-found: error
 
   plugin:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Giải nén ShellApp.zip nếu có
-        shell: bash
-        run: |
-          set -e
-          if [ -f ShellApp.zip ]; then
-            unzip -oq ShellApp.zip
-          fi
-
-          # Chuẩn hóa cấu trúc của ShellApp_fixed.zip.
-          if [ -d "shellapp/ShellApp" ] && [ ! -d "ShellApp" ]; then
-            mv shellapp/ShellApp ShellApp
-          fi
-
-          test -f ShellApp/plugins/sample-wasm/Cargo.toml
-          test -f ShellApp/plugins/sample-wasm/manifest.json
-
-      - name: Cài Rust WASM target
-        run: |
-          rustup target add wasm32-unknown-unknown
-          rustc --version
-          cargo --version
-
+      - name: Giải nén nếu bạn upload dạng zip
+        run: if [ -f ShellApp.zip ]; then unzip -oq ShellApp.zip; fi
       - name: Build plugin WASM
         working-directory: ShellApp/plugins/sample-wasm
-        shell: bash
         run: |
-          set -e
+          rustup target add wasm32-unknown-unknown
           cargo build --release --target wasm32-unknown-unknown
-
-          WASM="target/wasm32-unknown-unknown/release/sample_wasm.wasm"
-          test -f "$WASM"
-
-          rm -rf out
           mkdir -p out
-          cp "$WASM" out/plugin.wasm
-          cp manifest.json out/manifest.json
-
+          cp target/wasm32-unknown-unknown/release/sample_wasm.wasm out/plugin.wasm
+          cp manifest.json out/
           python3 - <<'PYEOF'
-          import base64
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(Path("manifest.json").read_text())
-          wasm = base64.b64encode(Path("out/plugin.wasm").read_bytes()).decode("ascii")
-
-          bundle = {
-              "manifest": manifest,
-              "wasm": wasm,
-          }
-
-          Path("out/sample-wasm.plugin.json").write_text(
-              json.dumps(bundle, ensure_ascii=False, separators=(",", ":")),
-              encoding="utf-8",
-          )
+          import json, base64
+          m = json.load(open('manifest.json'))
+          w = base64.b64encode(open('out/plugin.wasm', 'rb').read()).decode()
+          json.dump({"manifest": m, "wasm": w}, open('out/sample-wasm.plugin.json', 'w'))
           PYEOF
-
-          ls -lh out/
-
       - uses: actions/upload-artifact@v4
         with:
           name: sample-wasm
           path: ShellApp/plugins/sample-wasm/out
-          if-no-files-found: error
